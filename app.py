@@ -38,7 +38,7 @@ CSS = """
 """
 st.markdown(CSS, unsafe_allow_html=True)
 
-# --- Authentication Function ---
+# --- Authentication ---
 def check_password():
     if "password_correct" not in st.session_state: st.session_state.password_correct = False
     if "password_attempted" not in st.session_state: st.session_state.password_attempted = False
@@ -94,69 +94,70 @@ def perform_analysis(df_input, tb_min, tb_max, tb_step):
     df = df_input.copy()
     df['Tmed'] = (df['Tmin'] + df['Tmax']) / 2
     pheno_df = df.dropna(subset=['NF']).copy()
-    sta_details_df = df[['Data', 'Tmin', 'Tmax', 'Tmed']].copy()
+    
+    # Create Day, Month, Year columns for the report
+    df['Dia'] = df['Data'].dt.day
+    df['Mês'] = df['Data'].dt.month
+    df['Ano'] = df['Data'].dt.year
+    
+    sta_details_df = df[['Dia', 'Mês', 'Ano', 'Tmin', 'Tmax', 'Tmed']].copy()
+    
     results = []
     base_temps = np.arange(tb_min, tb_max + tb_step, tb_step)
+    
     for tb in base_temps:
-        tb_col_name = f"STa (Tb={tb:.1f})"
+        # Use only the number as the column header
+        tb_col_name = str(tb)
         df['STd'] = df['Tmed'] - tb
         df.loc[df['STd'] < 0, 'STd'] = 0
         sta_details_df[tb_col_name] = df['STd'].cumsum()
+        
         X, y = sta_details_df.loc[pheno_df.index, tb_col_name].values.reshape(-1, 1), pheno_df['NF'].values
         model = LinearRegression().fit(X, y)
-        results.append({'Temperatura (ºC)': tb, 'QME': mean_squared_error(y, model.predict(X)), 'R2': model.score(X, y), 'Coef_Angular': model.coef_[0], 'Intercepto': model.intercept_})
+        results.append({'Temperatura (ºC)': tb, 'R2': model.score(X, y), 'QME': mean_squared_error(y, model.predict(X)), 'Coef_Angular': model.coef_[0], 'Intercepto': model.intercept_})
+        
     qme_df = pd.DataFrame(results)
     best_result = qme_df.loc[qme_df['QME'].idxmin()]
+    
+    # Prepare the NF e STa DataFrame
     nf_sta_df = sta_details_df.loc[pheno_df.index].copy()
-    nf_sta_df.insert(1, 'NF', pheno_df['NF'])
+    nf_sta_df.insert(1, 'NF médio', pheno_df['NF']) # Use 'NF médio' as header
+    # Insert original full Date column for reference, then drop it for final output
+    nf_sta_df.insert(0, 'Data', df['Data'].loc[pheno_df.index])
+    
     return {"best": best_result, "qme_sheet": qme_df, "meteor_sheet": sta_details_df, "nf_sheet": nf_sta_df}, None
 
 @st.cache_data
 def create_excel_report(analysis_data):
-    """Generates an Excel report with 3 sheets (static values) for high performance."""
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        workbook = writer.book
-        date_format = workbook.add_format({'num_format': 'dd/mm/yyyy'})
-        header_format = workbook.add_format({'bold': True, 'text_wrap': True, 'valign': 'top', 'fg_color': '#D7E4BC', 'border': 1})
+        workbook, date_format, header_format = writer.book, writer.book.add_format({'num_format': 'dd/mm/yyyy'}), writer.book.add_format({'bold': True, 'text_wrap': True, 'valign': 'top', 'fg_color': '#D7E4BC', 'border': 1})
         
-        # Get dataframes from analysis result
+        # Prepare dataframes for Excel to match the original structure
         df_meteor = analysis_data['meteor_sheet']
-        df_nf = analysis_data['nf_sheet']
-        df_qme = analysis_data['qme_sheet'][['Temperatura (ºC)', 'R2', 'QME']] # Ensure correct column order
-
+        # For 'NF e STa', drop Dia/Mês/Ano and use the full 'Data' column
+        df_nf = analysis_data['nf_sheet'].drop(columns=['Dia', 'Mês', 'Ano', 'Tmin', 'Tmax', 'Tmed'])
+        df_qme = analysis_data['qme_sheet'][['Temperatura (ºC)', 'R2', 'QME']]
+        
         # Write dataframes to sheets
-        df_meteor.to_excel(writer, sheet_name='Dados Meteor. Periodo', index=False, header=False, startrow=1)
-        df_nf.to_excel(writer, sheet_name='NF e STa', index=False, header=False, startrow=1)
-        df_qme.to_excel(writer, sheet_name='QME', index=False, header=False, startrow=1)
+        df_meteor.to_excel(writer, sheet_name='Dados Meteor. Periodo', index=False)
+        df_nf.to_excel(writer, sheet_name='NF e STa', index=False)
+        df_qme.to_excel(writer, sheet_name='QME', index=False)
         
-        # Get worksheet objects
-        ws_meteor = writer.sheets['Dados Meteor. Periodo']
-        ws_nf = writer.sheets['NF e STa']
-        ws_qme = writer.sheets['QME']
+        ws_meteor, ws_nf, ws_qme = writer.sheets['Dados Meteor. Periodo'], writer.sheets['NF e STa'], writer.sheets['QME']
         
-        # Apply formatting
-        ws_meteor.set_column('A:A', 12, date_format)
         ws_nf.set_column('A:A', 12, date_format)
-        for ws, df in [(ws_meteor, df_meteor), (ws_nf, df_nf), (ws_qme, df_qme)]:
-            for col_num, value in enumerate(df.columns.values):
-                ws.write(0, col_num, value, header_format)
         
-        # Add chart to QME sheet
+        # Add Chart to QME sheet
         chart = workbook.add_chart({'type': 'scatter', 'subtype': 'smooth'})
-        chart.add_series({
-            'name':       'QME vs Tb',
-            'categories': ['QME', 1, 0, len(df_qme), 0], # =QME!$A$2:$A$N
-            'values':     ['QME', 1, 2, len(df_qme), 2], # =QME!$C$2:$C$N
-        })
-        chart.set_title({'name': 'QME vs. Temperatura Base'})
-        chart.set_x_axis({'name': 'Temperatura Base (ºC)'})
-        chart.set_y_axis({'name': 'Quadrado Médio do Erro (QME)'})
+        chart.add_series({'name': 'QME vs Tb', 'categories': ['QME', 1, 0, len(df_qme), 0], 'values': ['QME', 1, 2, len(df_qme), 2]})
+        chart.set_title({'name': 'QME vs. Temperatura Base'}), chart.set_x_axis({'name': 'Temperatura Base (ºC)'}), chart.set_y_axis({'name': 'Quadrado Médio do Erro (QME)'})
         ws_qme.insert_chart('E2', chart)
         
     return output.getvalue()
 
 # --- Main Application UI ---
+# Initialize session state variables to prevent errors on first run
 if 'analysis_data' not in st.session_state: st.session_state.analysis_data = None
 if 'analysis_error' not in st.session_state: st.session_state.analysis_error = None
 if 'analysis_name' not in st.session_state: st.session_state.analysis_name = ""
@@ -164,7 +165,6 @@ if 'df_validated' not in st.session_state: st.session_state.df_validated = None
 if 'validation_errors' not in st.session_state: st.session_state.validation_errors = []
 
 if check_password():
-    # --- Logo Display ---
     try:
         with open("logo.jpg", "rb") as f:
             img_bytes = f.read()
@@ -174,7 +174,14 @@ if check_password():
         st.title("EstimaTB 🌿")
 
     with st.expander("Como usar o EstimaTB?"):
-        st.markdown("""(Instruções completas aqui...)""") # Full instructions
+        st.markdown("""
+        O **EstimaTB** foi desenhado para ser poderoso e simples. Siga os passos abaixo para obter a sua análise:
+        - **1. Prepare o seu ficheiro de dados:** Em formato `.csv` ou `.xlsx`, com as colunas `Data`, `Tmin`, `Tmax` e `NF`. **Importante:** deixe as células da coluna `NF` em branco nos dias em que não houve medição.
+        - **2. Dê um nome à sua análise (opcional):** Para facilitar a sua organização.
+        - **3. Carregue o ficheiro:** Uma pré-visualização aparecerá para confirmação.
+        - **4. Analise:** Clique no botão verde para processar os dados.
+        - **5. Descarregue o Relatório Completo:** Após a análise, clique no botão amarelo para descarregar o ficheiro Excel com todos os detalhes, idêntico ao modelo de análise original.
+        """)
     
     analysis_name = st.text_input("Nome da Análise (opcional)")
     uploaded_file = st.file_uploader("Carregue o seu ficheiro de dados", type=['csv', 'xls', 'xlsx'], label_visibility="collapsed")
@@ -185,7 +192,8 @@ if check_password():
         if not errors and head_df is not None:
             with st.expander("Pré-visualização dos Dados Carregados", expanded=True): st.dataframe(head_df)
         elif errors:
-            st.warning("Foram encontrados problemas com os seus dados:"), [st.error(f"⚠️ {e}") for e in errors]
+            st.warning("Foram encontrados problemas com os seus dados:")
+            for e in errors: st.error(f"⚠️ {e}")
 
     with st.expander("Opções Avançadas"):
         c1, c2, c3 = st.columns(3)
