@@ -21,10 +21,12 @@ CSS = """
     div[data-testid="stButton"] > button[kind="primary"] {
         background-color: #4CAF50;
         color: white;
+        border-color: #4CAF50;
     }
     div[data-testid="stDownloadButton"] > button {
         background-color: #DAA520;
         color: white;
+        border-color: #DAA520;
     }
 """
 st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
@@ -123,34 +125,62 @@ def perform_analysis(df_input, tb_min, tb_max, tb_step):
 
 @st.cache_data
 def create_excel_report(analysis_data):
-    # (This function remains unchanged from the previous version)
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
         date_format = workbook.add_format({'num_format': 'dd/mm/yyyy'})
         header_format = workbook.add_format({'bold': True, 'text_wrap': True, 'valign': 'top', 'fg_color': '#D7E4BC', 'border': 1})
+        
         df_meteor, df_nf, df_qme = analysis_data['meteor_sheet'], analysis_data['nf_sheet'], analysis_data['qme_sheet']
-        df_meteor.to_excel(writer, sheet_name='Dados Meteor. Periodo', index=False, header=False, startrow=1), df_nf.to_excel(writer, sheet_name='NF e STa', index=False, header=False, startrow=1), df_qme.to_excel(writer, sheet_name='QME', index=False, header=False, startrow=1)
+        
+        df_meteor.to_excel(writer, sheet_name='Dados Meteor. Periodo', index=False, header=False, startrow=1)
+        df_nf.to_excel(writer, sheet_name='NF e STa', index=False, header=False, startrow=1)
+        df_qme.to_excel(writer, sheet_name='QME', index=False, header=False, startrow=1)
+        
         ws_meteor, ws_nf, ws_qme = writer.sheets['Dados Meteor. Periodo'], writer.sheets['NF e STa'], writer.sheets['QME']
-        ws_meteor.set_column('A:A', 12, date_format), ws_nf.set_column('A:A', 12, date_format)
+        
+        ws_meteor.set_column('A:A', 12, date_format)
+        ws_nf.set_column('A:A', 12, date_format)
+        
         for ws, df in [(ws_meteor, df_meteor), (ws_nf, df_nf), (ws_qme, df_qme)]:
-            for col_num, value in enumerate(df.columns.values): ws.write(0, col_num, value, header_format)
-        chart = workbook.add_chart({'type': 'scatter', 'subtype': 'smooth'}), chart.add_series({'name': 'QME vs Tb', 'categories': ['QME', 1, 0, len(df_qme), 0], 'values': ['QME', 1, 1, len(df_qme), 1]})
-        chart.set_title({'name': 'QME vs. Temperatura Base'}), chart.set_x_axis({'name': 'Temperatura Base (ºC)'}), chart.set_y_axis({'name': 'Quadrado Médio do Erro (QME)'}), ws_qme.insert_chart('F2', chart)
-        ws_ex = workbook.add_worksheet('Exemplo de Calculo'), best_tb = analysis_data['best']['Temperatura (ºC)'], ws_ex.df = analysis_data['meteor_sheet'][['Data', 'Tmin', 'Tmax', 'Tmed']].copy()
+            for col_num, value in enumerate(df.columns.values): 
+                ws.write(0, col_num, value, header_format)
+        
+        chart = workbook.add_chart({'type': 'scatter', 'subtype': 'smooth'})
+        chart.add_series({'name': 'QME vs Tb', 'categories': ['QME', 1, 0, len(df_qme), 0], 'values': ['QME', 1, 1, len(df_qme), 1]})
+        chart.set_title({'name': 'QME vs. Temperatura Base'})
+        chart.set_x_axis({'name': 'Temperatura Base (ºC)'})
+        chart.set_y_axis({'name': 'Quadrado Médio do Erro (QME)'})
+        ws_qme.insert_chart('F2', chart)
+        
+        # --- CORRECTED CODE BLOCK ---
+        # Each operation is now on its own line
+        ws_ex = workbook.add_worksheet('Exemplo de Calculo')
+        best_tb = analysis_data['best']['Temperatura (ºC)']
+        ws_ex.df = analysis_data['meteor_sheet'][['Data', 'Tmin', 'Tmax', 'Tmed']].copy()
+        
         headers = ['Data', 'Tmin', 'Tmax', 'Tmed', f'STd (Tb={best_tb:.1f})', f'STa (Tb={best_tb:.1f})']
-        for col_num, value in enumerate(headers): ws_ex.write(0, col_num, value, header_format)
+        
+        for col_num, value in enumerate(headers): 
+            ws_ex.write(0, col_num, value, header_format)
+            
         for row_num in range(1, len(ws_ex.df) + 1):
-            ws_ex.write(row_num, 0, ws_ex.df['Data'].iloc[row_num-1], date_format), ws_ex.write(row_num, 1, ws_ex.df['Tmin'].iloc[row_num-1]), ws_ex.write(row_num, 2, ws_ex.df['Tmax'].iloc[row_num-1]), ws_ex.write(row_num, 3, ws_ex.df['Tmed'].iloc[row_num-1])
+            ws_ex.write(row_num, 0, ws_ex.df['Data'].iloc[row_num-1], date_format)
+            ws_ex.write(row_num, 1, ws_ex.df['Tmin'].iloc[row_num-1])
+            ws_ex.write(row_num, 2, ws_ex.df['Tmax'].iloc[row_num-1])
+            ws_ex.write(row_num, 3, ws_ex.df['Tmed'].iloc[row_num-1])
             ws_ex.write_formula(row_num, 4, f'=MAX(0, D{row_num+1} - {best_tb})')
-            if row_num == 1: ws_ex.write_formula(row_num, 5, f'=E{row_num+1}')
-            else: ws_ex.write_formula(row_num, 5, f'=F{row_num} + E{row_num+1}')
+            if row_num == 1: 
+                ws_ex.write_formula(row_num, 5, f'=E{row_num+1}')
+            else: 
+                ws_ex.write_formula(row_num, 5, f'=F{row_num} + E{row_num+1}')
         ws_ex.set_column('A:A', 12)
+        # --- END OF CORRECTION ---
+        
     return output.getvalue()
 
 # --- Main Application UI ---
 if check_password():
-    # Adjusted logo layout
     st.image("logo.jpg", use_container_width=True)
     
     with st.expander("Como usar o EstimaTB?"):
@@ -159,11 +189,8 @@ if check_password():
     analysis_name = st.text_input("Nome da Análise (opcional)")
     uploaded_file = st.file_uploader("Carregue seu arquivo", type=['csv', 'xls', 'xlsx'], label_visibility="collapsed")
     
-    # Session state initialization for analysis
-    if 'df_validated' not in st.session_state:
-        st.session_state.df_validated = None
-    if 'validation_errors' not in st.session_state:
-        st.session_state.validation_errors = []
+    if 'df_validated' not in st.session_state: st.session_state.df_validated = None
+    if 'validation_errors' not in st.session_state: st.session_state.validation_errors = []
 
     if uploaded_file:
         df, errors, head_df = load_and_validate_data(uploaded_file)
