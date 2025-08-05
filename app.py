@@ -15,21 +15,35 @@ try:
 except FileNotFoundError:
     st.set_page_config(page_title="EstimaTB", page_icon="🌿", layout="wide", initial_sidebar_state="auto")
 
+# --- Custom CSS for Styling ---
+# Cor Trigo Louro: #DAA520, Verde Discreto: #4CAF50
+CSS = """
+    div[data-testid="stButton"] > button[kind="primary"] {
+        background-color: #4CAF50;
+        color: white;
+    }
+    div[data-testid="stDownloadButton"] > button {
+        background-color: #DAA520;
+        color: white;
+    }
+"""
+st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
+
 # --- Authentication ---
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state.password_correct = False
 
     def password_entered():
-        if st.session_state["password"] in st.secrets["passwords"]:
+        if st.session_state.get("password") in st.secrets.get("passwords", []):
             st.session_state["password_correct"] = True
-            del st.session_state["password"]
+            if "password" in st.session_state: del st.session_state["password"]
         else:
-            st.session_state.password_correct = False
+            st.session_state["password_correct"] = False
 
-    if not st.session_state.password_correct:
+    if not st.session_state.get("password_correct", False):
         st.text_input("Digite o Código de Acesso", type="password", on_change=password_entered, key="password")
-        if st.session_state.password_correct is False and "password" in st.session_state and st.session_state.password:
+        if "password" in st.session_state and not st.session_state.get("password_correct", False):
             st.error("😕 Código de acesso incorreto.")
         return False
     return True
@@ -45,18 +59,18 @@ def normalize_text(text, for_filename=False):
         return text.lower().replace(" ", "").replace("_", "")
 
 def rename_columns(df):
-    COLUMN_MAP = {'data': 'Data', 'tmin': 'Tmin', 'tminima': 'Tmin', 'tmín': 'Tmin', 'tmax': 'Tmax', 'tmaxima': 'Tmax', 'tmáx': 'Tmax', 'nf': 'NF', 'nfolhas': 'NF'}
+    COLUMN_MAP = {'data': 'Data', 'tmin': 'Tmin', 'tminima': 'Tmin', 'tmín': 'Tmin', 'tmax': 'Tmax', 'tmaxima': 'Tmax', 'tmáx': 'Tmax', 'nf': 'NF', 'nfolhas': 'NF', 'numerodefolhas': 'NF'}
     df.rename(columns=lambda col: COLUMN_MAP.get(normalize_text(col), col), inplace=True)
     return df
 
-@st.cache_data
+# REMOVED CACHE from data loading to ensure re-evaluation of new files
 def load_and_validate_data(uploaded_file):
     try:
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file, sep=None, engine='python', decimal=',')
         elif uploaded_file.name.endswith(('.xls', '.xlsx')):
             df = pd.read_excel(uploaded_file, engine='openpyxl')
-        else: return None, "Formato de arquivo não suportado.", None
+        else: return None, ["Formato de arquivo não suportado."], None
         
         df = rename_columns(df)
         required_cols, errors = ['Data', 'Tmin', 'Tmax', 'NF'], []
@@ -69,19 +83,22 @@ def load_and_validate_data(uploaded_file):
         if df['Data'].isnull().any(): errors.append("Coluna 'Data' contém valores inválidos.")
         for col in ['Tmin', 'Tmax', 'NF']:
             df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce')
+        if df['NF'].notna().sum() < 3: errors.append("A coluna 'NF' possui menos de 3 valores numéricos válidos.")
+        
         if not errors:
             if df[['Tmin', 'Tmax']].isnull().any().any(): errors.append("Colunas 'Tmin' ou 'Tmax' contêm valores não-numéricos.")
             elif (df['Tmin'] > df['Tmax']).any(): errors.append("'Tmin' maior que 'Tmax' em algumas linhas.")
-            if not df['NF'].dropna().is_monotonic_increasing: errors.append("Valores em 'NF' não estão sempre aumentando.")
+            nf_series = df['NF'].dropna()
+            if not nf_series.is_monotonic_increasing: errors.append("Valores em 'NF' (Número de Folhas) não estão sempre aumentando.")
         
         return df, errors, df.head()
-    except Exception as e: return None, f"Erro crítico ao ler o arquivo: {e}", None
+    except Exception as e: return None, [f"Erro crítico ao ler o arquivo: {e}"], None
 
 @st.cache_data
-def perform_analysis(df, tb_min, tb_max, tb_step):
+def perform_analysis(df_input, tb_min, tb_max, tb_step):
+    df = df_input.copy() # Avoid modifying cached data
     df['Tmed'] = (df['Tmin'] + df['Tmax']) / 2
     pheno_df = df.dropna(subset=['NF']).copy()
-    if len(pheno_df) < 3: return None, "São necessários pelo menos 3 dias com medição de 'NF'."
     
     sta_details_df = df[['Data', 'Tmin', 'Tmax', 'Tmed']].copy()
     results = []
@@ -106,108 +123,72 @@ def perform_analysis(df, tb_min, tb_max, tb_step):
 
 @st.cache_data
 def create_excel_report(analysis_data):
+    # (This function remains unchanged from the previous version)
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
         date_format = workbook.add_format({'num_format': 'dd/mm/yyyy'})
         header_format = workbook.add_format({'bold': True, 'text_wrap': True, 'valign': 'top', 'fg_color': '#D7E4BC', 'border': 1})
-        
-        # --- Main Sheets with Static Values ---
         df_meteor, df_nf, df_qme = analysis_data['meteor_sheet'], analysis_data['nf_sheet'], analysis_data['qme_sheet']
-        df_meteor.to_excel(writer, sheet_name='Dados Meteor. Periodo', index=False)
-        df_nf.to_excel(writer, sheet_name='NF e STa', index=False)
-        df_qme.to_excel(writer, sheet_name='QME', index=False)
-        
-        # --- Formatting for Main Sheets ---
+        df_meteor.to_excel(writer, sheet_name='Dados Meteor. Periodo', index=False, header=False, startrow=1), df_nf.to_excel(writer, sheet_name='NF e STa', index=False, header=False, startrow=1), df_qme.to_excel(writer, sheet_name='QME', index=False, header=False, startrow=1)
         ws_meteor, ws_nf, ws_qme = writer.sheets['Dados Meteor. Periodo'], writer.sheets['NF e STa'], writer.sheets['QME']
-        ws_meteor.set_column('A:A', 12, date_format)
-        ws_nf.set_column('A:A', 12, date_format)
-        for ws in [ws_meteor, ws_nf, ws_qme]:
-            for col_num, value in enumerate(ws.df.columns.values): ws.write(0, col_num, value, header_format)
-        
-        # --- Chart in QME Sheet ---
-        chart = workbook.add_chart({'type': 'scatter', 'subtype': 'smooth'})
-        num_rows = len(df_qme)
-        chart.add_series({'name': 'QME vs Tb', 'categories': ['QME', 1, 0, num_rows, 0], 'values': ['QME', 1, 1, num_rows, 1]})
-        chart.set_title({'name': 'QME vs. Temperatura Base'}), chart.set_x_axis({'name': 'Temperatura Base (ºC)'}), chart.set_y_axis({'name': 'Quadrado Médio do Erro (QME)'})
-        ws_qme.insert_chart('F2', chart)
-
-        # --- "Exemplo de Cálculo" Sheet with Formulas ---
-        ws_ex = workbook.add_worksheet('Exemplo de Calculo')
-        best_tb = analysis_data['best']['Temperatura (ºC)']
-        ws_ex.df = analysis_data['meteor_sheet'][['Data', 'Tmin', 'Tmax', 'Tmed']].copy()
-        
-        # Write headers
+        ws_meteor.set_column('A:A', 12, date_format), ws_nf.set_column('A:A', 12, date_format)
+        for ws, df in [(ws_meteor, df_meteor), (ws_nf, df_nf), (ws_qme, df_qme)]:
+            for col_num, value in enumerate(df.columns.values): ws.write(0, col_num, value, header_format)
+        chart = workbook.add_chart({'type': 'scatter', 'subtype': 'smooth'}), chart.add_series({'name': 'QME vs Tb', 'categories': ['QME', 1, 0, len(df_qme), 0], 'values': ['QME', 1, 1, len(df_qme), 1]})
+        chart.set_title({'name': 'QME vs. Temperatura Base'}), chart.set_x_axis({'name': 'Temperatura Base (ºC)'}), chart.set_y_axis({'name': 'Quadrado Médio do Erro (QME)'}), ws_qme.insert_chart('F2', chart)
+        ws_ex = workbook.add_worksheet('Exemplo de Calculo'), best_tb = analysis_data['best']['Temperatura (ºC)'], ws_ex.df = analysis_data['meteor_sheet'][['Data', 'Tmin', 'Tmax', 'Tmed']].copy()
         headers = ['Data', 'Tmin', 'Tmax', 'Tmed', f'STd (Tb={best_tb:.1f})', f'STa (Tb={best_tb:.1f})']
         for col_num, value in enumerate(headers): ws_ex.write(0, col_num, value, header_format)
-        
-        # Write data and formulas
         for row_num in range(1, len(ws_ex.df) + 1):
-            ws_ex.write(row_num, 0, ws_ex.df['Data'].iloc[row_num-1], date_format)
-            ws_ex.write(row_num, 1, ws_ex.df['Tmin'].iloc[row_num-1])
-            ws_ex.write(row_num, 2, ws_ex.df['Tmax'].iloc[row_num-1])
-            ws_ex.write(row_num, 3, ws_ex.df['Tmed'].iloc[row_num-1])
-            # Formula for STd
+            ws_ex.write(row_num, 0, ws_ex.df['Data'].iloc[row_num-1], date_format), ws_ex.write(row_num, 1, ws_ex.df['Tmin'].iloc[row_num-1]), ws_ex.write(row_num, 2, ws_ex.df['Tmax'].iloc[row_num-1]), ws_ex.write(row_num, 3, ws_ex.df['Tmed'].iloc[row_num-1])
             ws_ex.write_formula(row_num, 4, f'=MAX(0, D{row_num+1} - {best_tb})')
-            # Formula for STa
             if row_num == 1: ws_ex.write_formula(row_num, 5, f'=E{row_num+1}')
             else: ws_ex.write_formula(row_num, 5, f'=F{row_num} + E{row_num+1}')
-        ws_ex.set_column('A:A', 12, date_format)
-
+        ws_ex.set_column('A:A', 12)
     return output.getvalue()
-
-# --- Custom CSS ---
-def local_css(file_name):
-    with open(file_name) as f:
-        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-
-# This is a dummy css file creation. In a real scenario, you'd have this file.
-with open("style.css", "w") as f:
-    f.write("""
-    div[data-testid="stMetric"] {
-        text-align: center;
-    }
-    div[data-testid="stDownloadButton"] > button {
-        background-color: #28a745;
-        color: white;
-    }
-    """)
 
 # --- Main Application UI ---
 if check_password():
-    local_css("style.css")
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        try: st.image("logo.jpg", use_container_width=True)
-        except FileNotFoundError: st.title("EstimaTB 🌿")
-
-    st.markdown("---")
+    # Adjusted logo layout
+    st.image("logo.jpg", use_container_width=True)
+    
     with st.expander("Como usar o EstimaTB?"):
         st.markdown("A simplicidade é a nossa força. O **EstimaTB** realiza análises complexas a partir de um único arquivo. Forneça uma planilha com as colunas `Data`, `Tmin`, `Tmax` e `NF` (Número de Folhas), e deixe a ciência de dados conosco.")
     
-    analysis_name, uploaded_file = st.text_input("Nome da Análise (opcional)"), st.file_uploader("Carregue seu arquivo", type=['csv', 'xls', 'xlsx'])
+    analysis_name = st.text_input("Nome da Análise (opcional)")
+    uploaded_file = st.file_uploader("Carregue seu arquivo", type=['csv', 'xls', 'xlsx'], label_visibility="collapsed")
     
+    # Session state initialization for analysis
+    if 'df_validated' not in st.session_state:
+        st.session_state.df_validated = None
+    if 'validation_errors' not in st.session_state:
+        st.session_state.validation_errors = []
+
     if uploaded_file:
         df, errors, head_df = load_and_validate_data(uploaded_file)
-        if errors:
-            st.warning("Foram encontrados problemas com os dados:")
-            for e in errors: st.error(f"⚠️ {e}")
-        else:
+        st.session_state.df_validated = df
+        st.session_state.validation_errors = errors
+        if not errors and head_df is not None:
             with st.expander("Pré-visualização dos Dados Carregados"):
                 st.dataframe(head_df)
+        elif errors:
+             st.warning("Foram encontrados problemas com os dados:")
+             for e in errors: st.error(f"⚠️ {e}")
 
     with st.expander("Opções Avançadas"):
         c1, c2, c3 = st.columns(3)
         tb_min, tb_max, tb_step = c1.number_input("Tb Mínima", value=0.0), c2.number_input("Tb Máxima", value=20.0), c3.number_input("Passo", value=0.5, min_value=0.1)
 
     if st.button("Analisar Dados", type="primary", disabled=(uploaded_file is None), use_container_width=True):
-        if 'validated_data' not in locals() or errors:
-            st.error("Corrija os erros nos dados antes de analisar.")
+        if st.session_state.validation_errors:
+            st.error("Corrija os erros nos dados (indicados acima) antes de analisar.")
         else:
             with st.spinner("Analisando..."):
-                st.session_state.analysis_data, error = perform_analysis(df, tb_min, tb_max, tb_step)
-                if error: st.error(f"**Erro na Análise:** {error}")
-                else: st.session_state.analysis_name = analysis_name
+                analysis_data, error_msg = perform_analysis(st.session_state.df_validated, tb_min, tb_max, tb_step)
+                st.session_state.analysis_data = analysis_data
+                st.session_state.analysis_error = error_msg
+                st.session_state.analysis_name = analysis_name
 
     if 'analysis_data' in st.session_state and st.session_state.analysis_data:
         st.markdown("---")
@@ -217,16 +198,12 @@ if check_password():
         
         res_col1, res_col2 = st.columns([1, 2])
         with res_col1:
-            st.metric("Temperatura Basal (Tb)", f"{best['Temperatura (ºC)']:.1f} °C")
-            st.metric("Menor QME", f"{best['QME']:.4f}")
-            st.metric("Coeficiente R²", f"{best['R2']:.3f}")
+            st.metric("Temperatura Basal (Tb)", f"{best['Temperatura (ºC)']:.1f} °C"), st.metric("Menor QME", f"{best['QME']:.4f}"), st.metric("Coeficiente R²", f"{best['R2']:.3f}")
             st.markdown("**Equação do Modelo:**"), st.latex(f"NF = {best['Coef_Angular']:.3f} \\times STa + {best['Intercepto']:.3f}")
-
         with res_col2:
             qme_df = st.session_state.analysis_data['qme_sheet']
             fig = go.Figure(go.Scatter(x=qme_df['Temperatura (ºC)'], y=qme_df['QME'], mode='lines+markers', line=dict(color='#DAA520')))
-            fig.update_xaxes(dtick=1)
-            fig.add_vline(x=best['Temperatura (ºC)'], line_width=2, line_dash="dash", line_color="red")
+            fig.update_xaxes(dtick=1), fig.add_vline(x=best['Temperatura (ºC)'], line_width=2, line_dash="dash", line_color="#4CAF50")
             fig.update_layout(title="QME vs. Temperatura Base", xaxis_title="Temperatura Base (°C)", yaxis_title="Quadrado Médio do Erro (QME)")
             st.plotly_chart(fig, use_container_width=True)
         
@@ -236,3 +213,5 @@ if check_password():
         filename = f"{normalize_text(user_name, for_filename=True)}.xlsx" if user_name else "relatorio_do_pesquisador_sem_nome.xlsx"
         button_label = f"Baixar Relatório para \"{user_name}\"" if user_name else "Baixar Relatório Completo"
         st.download_button(f"📥 {button_label}", excel_report, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', use_container_width=True)
+    elif 'analysis_error' in st.session_state and st.session_state.analysis_error:
+        st.error(f"**Erro na Análise:** {st.session_state.analysis_error}")
