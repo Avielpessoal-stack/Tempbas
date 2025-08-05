@@ -14,14 +14,14 @@ try:
     st.set_page_config(
         page_title="EstimaTB",
         page_icon=logo,
-        layout="centered",
+        layout="wide",  # Changed layout to "wide"
         initial_sidebar_state="auto"
     )
 except FileNotFoundError:
     st.set_page_config(
         page_title="EstimaTB",
         page_icon="🌿",
-        layout="centered",
+        layout="wide",  # Changed layout to "wide"
         initial_sidebar_state="auto"
     )
 
@@ -29,31 +29,23 @@ except FileNotFoundError:
 def check_password():
     """Returns `True` if the user has the correct password."""
     def password_entered():
-        """Checks whether a password entered by the user is correct."""
         if st.session_state["password"] in st.secrets["passwords"]:
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Don't store password.
+            del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
-        # First run, show input for password.
-        st.text_input(
-            "Digite o Código de Acesso", type="password", on_change=password_entered, key="password"
-        )
+        st.text_input("Digite o Código de Acesso", type="password", on_change=password_entered, key="password")
         return False
     elif not st.session_state["password_correct"]:
-        # Password not correct, show input + error.
-        st.text_input(
-            "Digite o Código de Acesso", type="password", on_change=password_entered, key="password"
-        )
+        st.text_input("Digite o Código de Acesso", type="password", on_change=password_entered, key="password")
         st.error("😕 Código de acesso incorreto.")
         return False
     else:
-        # Password correct.
         return True
 
-# --- Helper Functions ---
+# --- Helper Functions (No changes from previous version) ---
 def normalize_text(text, for_filename=False):
     if not isinstance(text, str): return text
     nfkd_form = unicodedata.normalize('NFKD', text)
@@ -64,10 +56,7 @@ def normalize_text(text, for_filename=False):
         return text.lower().replace(" ", "").replace("_", "")
 
 def rename_columns(df):
-    COLUMN_MAP = {
-        'data': 'Data', 'tmin': 'Tmin', 'tminima': 'Tmin', 'tmín': 'Tmin',
-        'tmax': 'Tmax', 'tmaxima': 'Tmax', 'tmáx': 'Tmax', 'nf': 'NF', 'nfolhas': 'NF'
-    }
+    COLUMN_MAP = {'data': 'Data', 'tmin': 'Tmin', 'tminima': 'Tmin', 'tmín': 'Tmin', 'tmax': 'Tmax', 'tmaxima': 'Tmax', 'tmáx': 'Tmax', 'nf': 'NF', 'nfolhas': 'NF'}
     df.rename(columns=lambda col: COLUMN_MAP.get(normalize_text(col), col), inplace=True)
     return df
 
@@ -95,12 +84,9 @@ def validate_data(df):
     for col in ['Tmin', 'Tmax', 'NF']:
         df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce')
     if not errors:
-        if df[['Tmin', 'Tmax']].isnull().any().any():
-            errors.append("Colunas 'Tmin' ou 'Tmax' contêm valores não-numéricos.")
-        elif (df['Tmin'] > df['Tmax']).any():
-            errors.append("'Tmin' maior que 'Tmax' em algumas linhas.")
-        if not df['NF'].dropna().is_monotonic_increasing:
-           errors.append("Valores em 'NF' (Número de Folhas) não estão sempre aumentando.")
+        if df[['Tmin', 'Tmax']].isnull().any().any(): errors.append("Colunas 'Tmin' ou 'Tmax' contêm valores não-numéricos.")
+        elif (df['Tmin'] > df['Tmax']).any(): errors.append("'Tmin' maior que 'Tmax' em algumas linhas.")
+        if not df['NF'].dropna().is_monotonic_increasing: errors.append("Valores em 'NF' (Número de Folhas) não estão sempre aumentando.")
     return df, errors
 
 def perform_analysis(df, tb_min, tb_max, tb_step):
@@ -135,34 +121,34 @@ def create_excel_report(analysis_data):
         chart = workbook.add_chart({'type': 'scatter', 'subtype': 'smooth'})
         num_rows = len(analysis_data['qme_sheet'])
         chart.add_series({'name': 'QME vs Tb', 'categories': ['QME', 1, 0, num_rows, 0], 'values': ['QME', 1, 1, num_rows, 1]})
-        chart.set_title({'name': 'QME vs. Temperatura Base'})
-        chart.set_x_axis({'name': 'Temperatura Base (ºC)'})
-        chart.set_y_axis({'name': 'Quadrado Médio do Erro (QME)'})
+        chart.set_title({'name': 'QME vs. Temperatura Base'}), chart.set_x_axis({'name': 'Temperatura Base (ºC)'}), chart.set_y_axis({'name': 'Quadrado Médio do Erro (QME)'})
         worksheet.insert_chart('F2', chart)
     return output.getvalue()
 
 # --- Main Application UI ---
 if check_password():
-    try:
-        st.image("logo.jpg", width=100)
-    except FileNotFoundError:
-        pass
-    
-    st.title("EstimaTB")
-    st.markdown("##### Estimativa da Temperatura Basal a partir de dados brutos de campo.")
-    st.markdown("---")
+    # Centered and larger logo
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        try:
+            st.image("logo.jpg", use_column_width=True)
+        except FileNotFoundError:
+            st.title("EstimaTB 🌿")
 
+    st.markdown("---")
+    
+    # --- Input Section ---
     with st.expander("Como usar o EstimaTB?"):
         st.markdown("A simplicidade é a nossa força. O **EstimaTB** realiza análises complexas a partir de um único arquivo com dados mínimos. Forneça uma planilha com as colunas `Data`, `Tmin`, `Tmax` e `NF` (Número de Folhas), e deixe a ciência de dados conosco.")
     
-    analysis_name = st.text_input("Nome da Análise (opcional, para nomear o arquivo final)")
+    analysis_name = st.text_input("Nome da Análise (opcional)")
     uploaded_file = st.file_uploader("Carregue seu arquivo de dados (CSV ou Excel)", type=['csv', 'xls', 'xlsx'])
     
     with st.expander("Opções Avançadas"):
-        col1, col2, col3 = st.columns(3)
-        tb_min, tb_max, tb_step = col1.number_input("Tb Mínima", value=0.0), col2.number_input("Tb Máxima", value=20.0), col3.number_input("Passo", value=0.5, min_value=0.1)
+        c1, c2, c3 = st.columns(3)
+        tb_min, tb_max, tb_step = c1.number_input("Tb Mínima", value=0.0), c2.number_input("Tb Máxima", value=20.0), c3.number_input("Passo", value=0.5, min_value=0.1)
 
-    if st.button("Analisar Dados", type="primary", disabled=(uploaded_file is None)):
+    if st.button("Analisar Dados", type="primary", disabled=(uploaded_file is None), use_container_width=True):
         data, error = load_data(uploaded_file)
         if error: st.error(f"**Erro no Carregamento:** {error}")
         else:
@@ -175,25 +161,36 @@ if check_password():
                     st.session_state.analysis_data, error = perform_analysis(validated_data, tb_min, tb_max, tb_step)
                     if error: st.error(f"**Erro na Análise:** {error}")
                     else: st.session_state.analysis_name = analysis_name
-
+    
+    # --- Results Section ---
     if 'analysis_data' in st.session_state and st.session_state.analysis_data:
         st.markdown("---")
         results_title = f"Resultados para: \"{st.session_state.analysis_name}\"" if st.session_state.analysis_name else "Resultados da Análise"
         st.header(results_title)
         
         best = st.session_state.analysis_data['best']
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Temperatura Basal (Tb)", f"{best['Temperatura (ºC)']:.1f} °C"), col2.metric("Menor QME", f"{best['QME']:.4f}"), col3.metric("Coeficiente R²", f"{best['R2']:.3f}")
-        st.latex(f"NF = {best['Coef_Angular']:.3f} \\times STa + {best['Intercepto']:.3f}")
         
-        qme_df = st.session_state.analysis_data['qme_sheet']
-        fig = go.Figure(go.Scatter(x=qme_df['Temperatura (ºC)'], y=qme_df['QME'], mode='lines+markers'))
-        fig.update_layout(title="QME vs. Temperatura Base", xaxis_title="Temperatura Base (°C)", yaxis_title="Quadrado Médio do Erro (QME)")
-        st.plotly_chart(fig, use_container_width=True)
+        # --- Metrics and Equation in columns ---
+        res_col1, res_col2 = st.columns([1, 2])
+        with res_col1:
+            st.metric("Temperatura Basal (Tb)", f"{best['Temperatura (ºC)']:.1f} °C")
+            st.metric("Menor QME", f"{best['QME']:.4f}")
+            st.metric("Coeficiente R²", f"{best['R2']:.3f}")
+            st.markdown("**Equação do Modelo:**")
+            st.latex(f"NF = {best['Coef_Angular']:.3f} \\times STa + {best['Intercepto']:.3f}")
+
+        with res_col2:
+            qme_df = st.session_state.analysis_data['qme_sheet']
+            fig = go.Figure(go.Scatter(x=qme_df['Temperatura (ºC)'], y=qme_df['QME'], mode='lines+markers'))
+            fig.update_layout(title="QME vs. Temperatura Base", xaxis_title="Temperatura Base (°C)", yaxis_title="Quadrado Médio do Erro (QME)")
+            st.plotly_chart(fig, use_container_width=True)
         
+        st.markdown("---")
+        
+        # --- Download Button ---
         excel_report = create_excel_report(st.session_state.analysis_data)
         user_name = st.session_state.get('analysis_name', '')
         filename = f"{normalize_text(user_name, for_filename=True)}.xlsx" if user_name else "relatorio_do_pesquisador_sem_nome.xlsx"
         button_label = f"Baixar Relatório para \"{user_name}\"" if user_name else "Baixar Relatório Completo"
         
-        st.download_button(f"📥 {button_label}", excel_report, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        st.download_button(f"📥 {button_label}", excel_report, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', use_container_width=True)
