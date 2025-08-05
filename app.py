@@ -8,8 +8,7 @@ import unicodedata
 from io import BytesIO
 from PIL import Image
 
-# --- Page Configuration and Logo ---
-# This must be the very first Streamlit command.
+# --- Page Configuration: Must be the first Streamlit command ---
 try:
     logo = Image.open("logo.jpg")
     st.set_page_config(page_title="EstimaTB", page_icon=logo, layout="wide", initial_sidebar_state="auto")
@@ -17,7 +16,6 @@ except FileNotFoundError:
     st.set_page_config(page_title="EstimaTB", page_icon="🌿", layout="wide", initial_sidebar_state="auto")
 
 # --- Custom CSS for Styling ---
-# Cor Trigo Louro: #DAA520, Verde Discreto: #4CAF50
 CSS = """
     div[data-testid="stButton"] > button[kind="primary"] {
         background-color: #4CAF50;
@@ -34,29 +32,24 @@ st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
 
 # --- Authentication ---
 def check_password():
-    """Returns `True` if the user has the correct password."""
+    if "password_correct" not in st.session_state:
+        st.session_state.password_correct = False
+
     def password_entered():
-        """Checks whether a password entered by the user is correct."""
         if st.session_state.get("password") in st.secrets.get("passwords", []):
             st.session_state["password_correct"] = True
-            # Securely delete password from session state
-            if "password" in st.session_state:
-                del st.session_state["password"]
+            if "password" in st.session_state: del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
 
-    # Show input for password if not already authenticated.
     if not st.session_state.get("password_correct", False):
-        st.text_input(
-            "Digite o Código de Acesso", type="password", on_change=password_entered, key="password"
-        )
-        # Show error only if a password has been entered and it's incorrect.
+        st.text_input("Digite o Código de Acesso", type="password", on_change=password_entered, key="password")
         if "password_correct" in st.session_state and not st.session_state.password_correct:
             st.error("😕 Código de acesso incorreto.")
         return False
     return True
 
-# --- Helper Functions (Stable) ---
+# --- Helper Functions ---
 def normalize_text(text, for_filename=False):
     if not isinstance(text, str): return text
     nfkd_form = unicodedata.normalize('NFKD', text)
@@ -114,8 +107,7 @@ def perform_analysis(df_input, tb_min, tb_max, tb_step):
         X, y = sta_for_regression.values.reshape(-1, 1), pheno_df['NF'].values
         model = LinearRegression().fit(X, y)
         results.append({'Temperatura (ºC)': tb, 'QME': mean_squared_error(y, model.predict(X)), 'R2': model.score(X, y), 'Coef_Angular': model.coef_[0], 'Intercepto': model.intercept_})
-    qme_df = pd.DataFrame(results)
-    best_result = qme_df.loc[qme_df['QME'].idxmin()]
+    qme_df, best_result = pd.DataFrame(results), pd.DataFrame(results).loc[pd.DataFrame(results)['QME'].idxmin()]
     nf_sta_df = sta_details_df.loc[pheno_df.index].copy()
     nf_sta_df.insert(1, 'NF', pheno_df['NF'])
     return {"best": best_result, "qme_sheet": qme_df, "meteor_sheet": sta_details_df, "nf_sheet": nf_sta_df}, None
@@ -148,70 +140,72 @@ def create_excel_report(analysis_data):
     return output.getvalue()
 
 # --- Main Application UI ---
+if 'analysis_data' not in st.session_state: st.session_state.analysis_data = None
+if 'analysis_error' not in st.session_state: st.session_state.analysis_error = None
+if 'analysis_name' not in st.session_state: st.session_state.analysis_name = ""
+if 'df_validated' not in st.session_state: st.session_state.df_validated = None
+if 'validation_errors' not in st.session_state: st.session_state.validation_errors = []
+
 if check_password():
-    # Adjusted logo layout
-    col1, col2, col3 = st.columns([1.5, 3, 1.5])
-    with col2:
-        try: st.image("logo.jpg", use_container_width=True)
-        except FileNotFoundError: st.title("EstimaTB 🌿")
+    try:
+        st.image("logo.jpg", width=400) # Controlled width for the logo
+    except FileNotFoundError:
+        st.title("EstimaTB 🌿")
 
     with st.expander("Como usar o EstimaTB?"):
-        st.markdown("A simplicidade é a nossa força. O **EstimaTB** realiza análises complexas a partir de um único arquivo. Forneça uma planilha com as colunas `Data`, `Tmin`, `Tmax` e `NF` (Número de Folhas), e deixe a ciência de dados conosco.")
+        st.markdown("A simplicidade é a nossa força...")
     
     analysis_name = st.text_input("Nome da Análise (opcional)")
     uploaded_file = st.file_uploader("Carregue seu arquivo", type=['csv', 'xls', 'xlsx'], label_visibility="collapsed")
     
-    if 'df_validated' not in st.session_state: st.session_state.df_validated = None
-    if 'validation_errors' not in st.session_state: st.session_state.validation_errors = []
-
     if uploaded_file:
         df, errors, head_df = load_and_validate_data(uploaded_file)
-        st.session_state.df_validated = df
-        st.session_state.validation_errors = errors
+        st.session_state.df_validated, st.session_state.validation_errors = df, errors
         if not errors and head_df is not None:
-            with st.expander("Pré-visualização dos Dados Carregados"):
-                st.dataframe(head_df)
+            with st.expander("Pré-visualização dos Dados Carregados"): st.dataframe(head_df)
         elif errors:
-             st.warning("Foram encontrados problemas com os dados:")
-             for e in errors: st.error(f"⚠️ {e}")
+            st.warning("Foram encontrados problemas com os dados:")
+            for e in errors: st.error(f"⚠️ {e}")
 
     with st.expander("Opções Avançadas"):
         c1, c2, c3 = st.columns(3)
         tb_min, tb_max, tb_step = c1.number_input("Tb Mínima", value=0.0), c2.number_input("Tb Máxima", value=20.0), c3.number_input("Passo", value=0.5, min_value=0.1)
 
     if st.button("Analisar Dados", type="primary", disabled=(uploaded_file is None), use_container_width=True):
-        if st.session_state.get('validation_errors'):
-            st.error("Corrija os erros nos dados (indicados acima) antes de analisar.")
+        if st.session_state.validation_errors:
+            st.error("Corrija os erros nos dados antes de analisar.")
         else:
             with st.spinner("Analisando..."):
                 analysis_data, error_msg = perform_analysis(st.session_state.df_validated, tb_min, tb_max, tb_step)
-                st.session_state.analysis_data = analysis_data
-                st.session_state.analysis_error = error_msg
+                st.session_state.analysis_data, st.session_state.analysis_error = analysis_data, error_msg
                 st.session_state.analysis_name = analysis_name
-
-    if 'analysis_data' in st.session_state and st.session_state.analysis_data:
+    
+    # --- Results Section ---
+    if st.session_state.analysis_data:
         st.markdown("---")
         results_title = f"Resultados para: \"{st.session_state.analysis_name}\"" if st.session_state.analysis_name else "Resultados da Análise"
         st.header(results_title)
-        best = st.session_state.analysis_data['best']
         
+        best = st.session_state.analysis_data['best']
         res_col1, res_col2 = st.columns([1, 2])
         with res_col1:
             st.metric("Temperatura Basal (Tb)", f"{best['Temperatura (ºC)']:.1f} °C"), st.metric("Menor QME", f"{best['QME']:.4f}"), st.metric("Coeficiente R²", f"{best['R2']:.3f}")
             st.markdown("**Equação do Modelo:**"), st.latex(f"NF = {best['Coef_Angular']:.3f} \\times STa + {best['Intercepto']:.3f}")
+
         with res_col2:
             qme_df = st.session_state.analysis_data['qme_sheet']
             fig = go.Figure(go.Scatter(x=qme_df['Temperatura (ºC)'], y=qme_df['QME'], mode='lines+markers', line=dict(color='#DAA520')))
             fig.update_xaxes(dtick=1)
             fig.add_vline(x=best['Temperatura (ºC)'], line_width=2, line_dash="dash", line_color="#4CAF50")
-            # This is rendered only ONCE, preventing the duplicate ID error.
-            st.plotly_chart(fig, use_container_width=True)
-        
+            fig.update_layout(title_text="QME vs. Temperatura Base", xaxis_title="Temperatura Base (°C)", yaxis_title="Quadrado Médio do Erro (QME)")
+            st.plotly_chart(fig, use_container_width=True) # This is the single, explicit call to render the chart
+
         st.markdown("---")
         excel_report = create_excel_report(st.session_state.analysis_data)
         user_name = st.session_state.get('analysis_name', '')
         filename = f"{normalize_text(user_name, for_filename=True)}.xlsx" if user_name else "relatorio_do_pesquisador_sem_nome.xlsx"
         button_label = f"Baixar Relatório para \"{user_name}\"" if user_name else "Baixar Relatório Completo"
         st.download_button(f"📥 {button_label}", excel_report, filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', use_container_width=True)
-    elif 'analysis_error' in st.session_state and st.session_state.analysis_error:
+
+    elif st.session_state.analysis_error:
         st.error(f"**Erro na Análise:** {st.session_state.analysis_error}")
